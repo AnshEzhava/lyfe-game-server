@@ -3,14 +3,9 @@ package com.ansh.lyfegameserver.dto.user;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 
-import java.util.Map;
-
 @Getter @AllArgsConstructor
-public class FindUserResponse {
-
+public class StudyResponse {
     private int responseCode;
     private String responseMessage;
-    private String displayName;
-    private Map<String, String> stats;
-
+    private UserResponse response;
 }

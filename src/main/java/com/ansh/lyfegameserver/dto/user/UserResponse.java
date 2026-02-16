@@ -1,16 +1,14 @@
 package com.ansh.lyfegameserver.dto.user;
 
+import com.ansh.lyfegameserver.data.UserStats;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 
-import java.util.Map;
-
 @Getter @AllArgsConstructor
-public class FindUserResponse {
-
-    private int responseCode;
-    private String responseMessage;
+public class UserResponse {
+    
+    private String id;
     private String displayName;
-    private Map<String, String> stats;
-
+    private Long balance;
+    private UserStats stats;
 }

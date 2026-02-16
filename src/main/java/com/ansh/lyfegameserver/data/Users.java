@@ -17,10 +17,12 @@ public class Users {
     private String clerkId;
     private String displayName;
     private Long branks;
+    private UserStats stats;
 
     public Users(String clerkId, String displayName){
         this.clerkId = clerkId;
         this.displayName = displayName;
         this.branks = 1000L;
+        this.stats = new UserStats();
     }
 }

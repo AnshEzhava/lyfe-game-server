@@ -28,4 +28,28 @@ public class UserService {
         user.setBranks(branks);
         return userRepository.save(user);
     }
+
+    public Users study(String clerkId, String courseId) {
+        Users user = findByClerkId(clerkId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        
+        // Cost and intelligence gain (can be customized based on courseId in future)
+        Long studyCost = 100L;
+        Integer intelligenceGain = 5;
+        
+        // Check if user has enough money
+        if (user.getBranks() < studyCost) {
+            throw new RuntimeException("Insufficient funds");
+        }
+        
+        // Deduct cost
+        user.setBranks(user.getBranks() - studyCost);
+        
+        // Increase intelligence (cap at 100)
+        Integer currentIntelligence = user.getStats().getIntelligence();
+        Integer newIntelligence = Math.min(currentIntelligence + intelligenceGain, 100);
+        user.getStats().setIntelligence(newIntelligence);
+        
+        return userRepository.save(user);
+    }
 }

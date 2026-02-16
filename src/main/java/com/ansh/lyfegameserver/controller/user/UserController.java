@@ -4,8 +4,9 @@ import com.ansh.lyfegameserver.data.Users;
 import com.ansh.lyfegameserver.dto.user.BalanceResponse;
 import com.ansh.lyfegameserver.dto.user.CreateUserRequest;
 import com.ansh.lyfegameserver.dto.user.CreateUserResponse;
-import com.ansh.lyfegameserver.dto.user.FindUserResponse;
-import org.apache.coyote.Response;
+import com.ansh.lyfegameserver.dto.user.StudyRequest;
+import com.ansh.lyfegameserver.dto.user.StudyResponse;
+import com.ansh.lyfegameserver.dto.user.UserResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.ansh.lyfegameserver.service.user.UserService;
@@ -28,11 +29,19 @@ public class UserController {
     }
 
     @GetMapping("/find")
-    public ResponseEntity<FindUserResponse> findUser(JwtAuthenticationToken auth) {
+    public ResponseEntity<StudyResponse> findUser(JwtAuthenticationToken auth) {
         String clerkId = auth.getName();
         logger.info("Finding user with clerkId: {}", clerkId);
         return userService.findByClerkId(clerkId)
-                .map(user -> ResponseEntity.ok(new FindUserResponse(0, "Success", user.getDisplayName())))
+                .map(user -> {
+                    UserResponse userResponse = new UserResponse(
+                        user.getId(),
+                        user.getDisplayName(),
+                        user.getBranks(),
+                        user.getStats()
+                    );
+                    return ResponseEntity.ok(new StudyResponse(0, "Success", userResponse));
+                })
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -52,5 +61,29 @@ public class UserController {
        String clerkId = auth.getName();
        Optional<Users> user = userService.findByClerkId(clerkId);
         return user.map(users -> ResponseEntity.ok(new BalanceResponse(0, "Successfully Fetched Balance", users.getBranks()))).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @PostMapping("/job/study")
+    public ResponseEntity<StudyResponse> study(@RequestBody StudyRequest studyRequest, JwtAuthenticationToken auth) {
+        String clerkId = auth.getName();
+        try {
+            Users user = userService.study(clerkId, studyRequest.getCourseId());
+            UserResponse userResponse = new UserResponse(
+                user.getId(),
+                user.getDisplayName(),
+                user.getBranks(),
+                user.getStats()
+            );
+            return ResponseEntity.ok(new StudyResponse(0, "Successfully completed study session!", userResponse));
+        } catch (RuntimeException e) {
+            if (e.getMessage().equals("Insufficient funds")) {
+                return ResponseEntity.badRequest().body(
+                    new StudyResponse(1, "Insufficient funds. Study costs 100 branks.", null)
+                );
+            }
+            return ResponseEntity.badRequest().body(
+                new StudyResponse(1, e.getMessage(), null)
+            );
+        }
     }
 }
