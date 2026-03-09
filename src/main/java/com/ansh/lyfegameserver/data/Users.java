@@ -6,6 +6,9 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import java.util.ArrayList;
+import java.util.List;
+
 @Getter @Setter
 @Document(collection = "users")
 public class Users {
@@ -25,6 +28,12 @@ public class Users {
     /** The user's current active course enrollment, or null if not enrolled */
     private UserCourse activeCourse;
 
+    /** Stock holdings — shares owned per stock */
+    private List<UserStockHolding> stockHoldings = new ArrayList<>();
+
+    /** IPO the user has founded, or null if none */
+    private UserIPO ipo;
+
     public Users(String clerkId, String displayName){
         this.clerkId = clerkId;
         this.displayName = displayName;
@@ -32,5 +41,7 @@ public class Users {
         this.stats = new UserStats();
         this.activeJob = null;
         this.activeCourse = null;
+        this.stockHoldings = new ArrayList<>();
+        this.ipo = null;
     }
 }
