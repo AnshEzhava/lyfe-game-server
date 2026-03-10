@@ -141,8 +141,43 @@ public class StockController {
         }
     }
 
+    @PostMapping("/{stockId}/dilute")
+    public ResponseEntity<?> dilute(
+        @PathVariable String stockId,
+        @RequestBody DiluteRequest req,
+        JwtAuthenticationToken auth
+    ) {
+        String clerkId = auth.getName();
+        try {
+            StockService.TradeResult result = stockService.dilute(clerkId, stockId, req.quantity());
+            UserResponse userResp = new UserResponse(
+                result.user().getId(),
+                result.user().getDisplayName(),
+                result.user().getBranks(),
+                result.user().getStats()
+            );
+            return ResponseEntity.ok(new TradeResponse(
+                0, "Dilution complete.",
+                result.sharesTransacted(),
+                result.avgPrice(),
+                result.branksDelta(),
+                result.newPoolPrice(),
+                userResp
+            ));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(
+                java.util.Map.of("responseMessage", e.getMessage())
+            );
+        } catch (RuntimeException e) {
+            logger.error("Dilute error for {}: {}", clerkId, e.getMessage());
+            return ResponseEntity.internalServerError().body(
+                java.util.Map.of("responseMessage", "Internal error.")
+            );
+        }
+    }
+
     @PostMapping("/ipo")
-    public ResponseEntity<StockInfo> createIPO(
+    public ResponseEntity<?> createIPO(
         @RequestBody IPOCreateRequest req,
         JwtAuthenticationToken auth
     ) {
@@ -150,12 +185,15 @@ public class StockController {
         try {
             Stock stock = stockService.createIPO(clerkId, req);
             return ResponseEntity.ok(stockService.getStock(stock.getId()));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().build();
-        } catch (IllegalStateException e) {
-            return ResponseEntity.badRequest().build();
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(
+                java.util.Map.of("responseMessage", e.getMessage())
+            );
         } catch (RuntimeException e) {
-            return ResponseEntity.notFound().build();
+            logger.error("IPO error for {}: {}", clerkId, e.getMessage());
+            return ResponseEntity.internalServerError().body(
+                java.util.Map.of("responseMessage", "Internal error: " + e.getMessage())
+            );
         }
     }
 }

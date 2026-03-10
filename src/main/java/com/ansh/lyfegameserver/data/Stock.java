@@ -28,6 +28,8 @@ public class Stock {
 
     private boolean govtBond;
 
+    private Sector sector;
+
     /** AMM liquidity pool — Branks reserve */
     private long liquidityBranks;
 
@@ -49,6 +51,13 @@ public class Stock {
 
     /** Rolling price history, capped at 100 entries (most recent last). */
     private List<Double> priceHistory = new ArrayList<>();
+
+    /**
+     * Hourly price snapshots, capped at 24 entries (most recent last).
+     * One entry is appended every 60 real-seconds (= 1 game-hour) by the scheduler.
+     * Used to compute the 24-game-hour price change.
+     */
+    private List<Double> hourlySnapshots = new ArrayList<>();
 
     public Stock(String ticker, String name, String founderClerkId, boolean govtBond,
                  long liquidityBranks, long liquidityShares, long totalSupply,

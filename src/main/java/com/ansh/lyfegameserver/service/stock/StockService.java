@@ -246,7 +246,13 @@ public class StockService {
             );
         }
         if (user.getIpo() != null) {
-            throw new IllegalStateException("You have already launched a company.");
+            // If the stock was manually deleted from the DB, clear the stale reference
+            if (stockRepository.findById(user.getIpo().getStockId()).isEmpty()) {
+                user.setIpo(null);
+                userRepository.save(user);
+            } else {
+                throw new IllegalStateException("You have already launched a company.");
+            }
         }
         if (stockRepository.findByTicker(req.ticker().toUpperCase()).isPresent()) {
             throw new IllegalStateException("Ticker '" + req.ticker() + "' is already taken.");
@@ -273,12 +279,54 @@ public class StockService {
             req.ticker().toUpperCase(), req.name(), clerkId, false,
             initialPoolBranks, publicShares, req.totalSupply(), founderShares, 0
         );
+        stock.setSector(req.sector());
         Stock saved = stockRepository.save(stock);
 
         user.setIpo(new UserIPO(saved.getId(), founderShares));
         userRepository.save(user);
 
         return saved;
+    }
+
+    // ─── Dilution ────────────────────────────────────────────────────────────
+
+    public TradeResult dilute(String clerkId, String stockId, long quantity) {
+        Users user = requireUser(clerkId);
+        Stock stock = requireStock(stockId);
+
+        if (!clerkId.equals(stock.getFounderClerkId())) {
+            throw new IllegalStateException("Only the founder can dilute shares.");
+        }
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("Quantity must be positive.");
+        }
+        if (quantity > stock.getFounderSharesRetained()) {
+            throw new IllegalStateException(
+                "Insufficient retained shares. Retained: " + stock.getFounderSharesRetained()
+            );
+        }
+
+        long maxBranksImpact = (long) (stock.getLiquidityBranks() * MAX_POOL_IMPACT_FRACTION);
+        long grossReturn = computeSellReturn(stock, quantity);
+        if (grossReturn > maxBranksImpact) {
+            throw new IllegalStateException(
+                "Dilution too large. Max single-trade impact is 10% of pool depth."
+            );
+        }
+
+        // AMM sell: retained shares go into pool, founder receives Branks
+        user.setBranks(user.getBranks() + grossReturn);
+        stock.setLiquidityBranks(stock.getLiquidityBranks() - grossReturn);
+        stock.setLiquidityShares(stock.getLiquidityShares() + quantity);
+        stock.setFounderSharesRetained(stock.getFounderSharesRetained() - quantity);
+
+        stock.appendPrice(stock.getCurrentPrice());
+        stockRepository.save(stock);
+        Users saved = userRepository.save(user);
+        broadcaster.broadcast(stock);
+
+        double avgPrice = (double) grossReturn / quantity;
+        return new TradeResult(saved, quantity, avgPrice, grossReturn, stock.getCurrentPrice());
     }
 
     // ─── Govt Bond Yield ────────────────────────────────────────────────────
@@ -397,15 +445,33 @@ public class StockService {
     }
 
     private StockInfo toStockInfo(Stock stock) {
-        // 24h change: not tracked per-tick — approximated as 0 for now.
+        double current = stock.getCurrentPrice();
+        List<Double> snaps = stock.getHourlySnapshots();
+        double ref = snaps.isEmpty() ? current : snaps.get(0);
+        double change = current - ref;
+        double changePct = ref > 0 ? (change / ref) * 100.0 : 0.0;
         return new StockInfo(
             stock.getId(), stock.getTicker(), stock.getName(),
-            stock.isGovtBond(), stock.getCurrentPrice(),
-            0.0, 0.0,
+            stock.isGovtBond(), stock.getSector(), current,
+            change, changePct,
             stock.getLiquidityBranks(), stock.getLiquidityShares(),
             stock.getTotalSupply(), stock.getYieldRateBps(),
-            stock.getPriceHistory()
+            stock.getPriceHistory(),
+            stock.getFounderClerkId(),
+            stock.getFounderSharesRetained()
         );
+    }
+
+    /** Called every 60 real-seconds (= 1 game-hour) by the scheduler. */
+    public void snapshotHourlyPrices() {
+        List<Stock> stocks = stockRepository.findAll();
+        for (Stock stock : stocks) {
+            List<Double> snaps = stock.getHourlySnapshots();
+            snaps.add(stock.getCurrentPrice());
+            if (snaps.size() > 24) snaps.remove(0);
+            stock.setHourlySnapshots(snaps);
+        }
+        stockRepository.saveAll(stocks);
     }
 
     private Users requireUser(String clerkId) {

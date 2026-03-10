@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 /**
  * Runs background scheduled tasks for the stock market:
  * - Limit order fills: every 1 real-second
+ * - Hourly price snapshots: every 60 real-seconds (= 1 game-hour), used for 24h % change
  * - Govt bond yield payout: every 24 real-seconds (= 1 game-day)
  */
 @Component
@@ -20,6 +21,12 @@ public class StockScheduler {
     @Scheduled(fixedRate = 1_000)
     public void fillLimitOrders() {
         stockService.processLimitOrders();
+    }
+
+    /** 1 game-hour = 60 real-seconds */
+    @Scheduled(fixedRate = 60_000)
+    public void snapshotHourlyPrices() {
+        stockService.snapshotHourlyPrices();
     }
 
     /** 1 game-day = 24 real-seconds */
