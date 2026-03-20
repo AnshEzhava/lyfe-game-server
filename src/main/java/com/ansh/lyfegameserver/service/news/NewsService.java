@@ -9,10 +9,7 @@ import com.ansh.lyfegameserver.websocket.StockPriceBroadcaster;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -38,7 +35,6 @@ public class NewsService {
         "SECTOR_BOOM", "SECTOR_SUBSIDY"
     };
 
-    /** Map from event enum string → human-readable description for the Mistral prompt */
     private static final Map<String, String> EVENT_DESC = Map.ofEntries(
         Map.entry("REGULATORY_PROBE",  "under investigation by market regulators"),
         Map.entry("EXEC_SCANDAL",      "hit by a major executive misconduct scandal"),
@@ -58,10 +54,21 @@ public class NewsService {
         Map.entry("SECTOR_SUBSIDY",    "receiving significant government subsidies and support")
     );
 
-    private static final double STOCK_EVENT_PROBABILITY = 0.15;
-    private static final double SECTOR_EVENT_PROBABILITY = 0.05;
-    private static final double REVERSAL_THRESHOLD_UP   = 20.0;
-    private static final double REVERSAL_THRESHOLD_DOWN = -25.0;
+    // ─── Tuning constants ──────────────────────────────────────────────────
+
+    private static final int    TOTAL_DAILY_HEADLINES      = 10;
+    private static final int    MAX_SECTOR_HEADLINES       = 4;
+    /** Stock up >20% in 24h → 70% chance negative news */
+    private static final double COMPANY_BIAS_UP_THRESHOLD  = 20.0;
+    /** Stock down >25% in 24h → 70% chance positive news */
+    private static final double COMPANY_BIAS_DOWN_THRESHOLD = -25.0;
+    /** Sector avg up >15% in 24h → 70% chance negative news */
+    private static final double SECTOR_BIAS_UP_THRESHOLD   = 15.0;
+    /** Sector avg down >20% in 24h → 70% chance positive news */
+    private static final double SECTOR_BIAS_DOWN_THRESHOLD = -20.0;
+    private static final double BIAS_PROBABILITY           = 0.70;
+    /** Each company in a sector gets base impact ± this % */
+    private static final double SECTOR_IMPACT_VARIANCE     = 2.0;
 
     private final StockRepository stockRepository;
     private final NewsItemRepository newsItemRepository;
@@ -89,45 +96,60 @@ public class NewsService {
     }
 
     /**
-     * Called every 120 real-seconds by the scheduler.
-     * Evaluates each non-bond stock for a 15% chance news event,
-     * and separately evaluates a 5% chance of a sector-wide event.
+     * Called once per game-day. Publishes a morning batch of ~10 headlines:
+     * one per distinct sector (capped at MAX_SECTOR_HEADLINES), with the
+     * remainder as company-specific stories.
      */
-    public void evaluateAndPublish() {
-        List<Stock> stocks = stockRepository.findAll();
+    public void triggerDailyNews() {
+        List<Stock> eligible = stockRepository.findAll().stream()
+            .filter(s -> !s.isGovtBond() && s.getSector() != null)
+            .collect(Collectors.toList());
 
-        // Per-stock events
-        for (Stock stock : stocks) {
-            if (stock.isGovtBond()) continue;
-            if (rng.nextDouble() > STOCK_EVENT_PROBABILITY) continue;
-            publishCompanyEvent(stock);
+        if (eligible.isEmpty()) return;
+
+        List<Sector> sectors = eligible.stream()
+            .map(Stock::getSector)
+            .distinct()
+            .collect(Collectors.toList());
+        Collections.shuffle(sectors, rng);
+
+        int sectorCount  = Math.min(sectors.size(), MAX_SECTOR_HEADLINES);
+        int companyCount = TOTAL_DAILY_HEADLINES - sectorCount;
+
+        for (int i = 0; i < sectorCount; i++) {
+            publishSectorEvent(eligible, sectors.get(i));
         }
 
-        // Sector-wide event (5% chance per evaluation cycle)
-        if (rng.nextDouble() <= SECTOR_EVENT_PROBABILITY) {
-            publishSectorEvent(stocks);
+        List<Stock> candidates = new ArrayList<>(eligible);
+        Collections.shuffle(candidates, rng);
+        int published = 0;
+        for (Stock stock : candidates) {
+            if (published >= companyCount) break;
+            publishCompanyEvent(stock);
+            published++;
         }
     }
 
     // ─── Company event ─────────────────────────────────────────────────────
 
     private void publishCompanyEvent(Stock stock) {
-        boolean positive = determineDirection(stock);
-        double impactPct = (3 + rng.nextDouble() * 7) * (positive ? 1 : -1);
+        double changePct = compute24hChangePct(stock);
+        boolean positive = determineCompanyDirection(changePct);
+        double impactPct = (3.0 + rng.nextDouble() * 7.0) * (positive ? 1 : -1);
         String eventType = positive
             ? POS_EVENTS[rng.nextInt(POS_EVENTS.length)]
             : NEG_EVENTS[rng.nextInt(NEG_EVENTS.length)];
 
         String userPrompt = String.format(
-            "Company: %s (%s), Sector: %s%nEvent: %s%nSentiment: %s%nWrite the news article.",
+            "Company: %s (%s), Sector: %s%nPerformance: %s%.1f%% in the last 24 game-hours%nEvent: %s%nSentiment: %s%nWrite the news article.",
             stock.getName(), stock.getTicker(),
-            stock.getSector() != null ? stock.getSector().name() : "General",
+            stock.getSector() != null ? sectorLabel(stock.getSector()) : "General",
+            changePct >= 0 ? "+" : "", changePct,
             EVENT_DESC.getOrDefault(eventType, eventType),
             positive ? "positive" : "negative"
         );
 
         MistralClient.MistralArticle article = mistralClient.generateArticle(userPrompt);
-
         applyPoolImpact(stock, impactPct);
 
         NewsItem item = new NewsItem(
@@ -141,66 +163,65 @@ public class NewsService {
 
     // ─── Sector event ──────────────────────────────────────────────────────
 
-    private void publishSectorEvent(List<Stock> allStocks) {
-        // Collect non-bond stocks with a non-null sector
-        List<Stock> eligibleStocks = allStocks.stream()
-            .filter(s -> !s.isGovtBond() && s.getSector() != null)
+    private void publishSectorEvent(List<Stock> eligible, Sector sector) {
+        List<Stock> sectorStocks = eligible.stream()
+            .filter(s -> sector.equals(s.getSector()))
             .toList();
 
-        if (eligibleStocks.isEmpty()) return;
+        if (sectorStocks.isEmpty()) return;
 
-        // Pick a random sector that has at least one stock
-        List<Sector> sectors = eligibleStocks.stream()
-            .map(Stock::getSector)
-            .distinct()
-            .collect(Collectors.toList());
-        Sector sector = sectors.get(rng.nextInt(sectors.size()));
+        double avgChangePct = sectorStocks.stream()
+            .mapToDouble(this::compute24hChangePct)
+            .average()
+            .orElse(0.0);
 
-        boolean positive = rng.nextBoolean();
-        double impactPct = (3 + rng.nextDouble() * 4) * (positive ? 1 : -1);
+        boolean positive = determineSectorDirection(avgChangePct);
+        double basePct   = (3.0 + rng.nextDouble() * 4.0) * (positive ? 1 : -1);
         String eventType = positive
             ? POS_SECTOR_EVENTS[rng.nextInt(POS_SECTOR_EVENTS.length)]
             : NEG_SECTOR_EVENTS[rng.nextInt(NEG_SECTOR_EVENTS.length)];
 
-        String sectorLabel = sectorLabel(sector);
+        String sectorName = sectorLabel(sector);
         String userPrompt = String.format(
-            "Sector: %s%nEvent: %s%nSentiment: %s%nWrite the news article.",
-            sectorLabel,
+            "Sector: %s%nPerformance: average %s%.1f%% across the sector in the last 24 game-hours%nEvent: %s%nSentiment: %s%nWrite the news article.",
+            sectorName,
+            avgChangePct >= 0 ? "+" : "", avgChangePct,
             EVENT_DESC.getOrDefault(eventType, eventType),
             positive ? "positive" : "negative"
         );
 
         MistralClient.MistralArticle article = mistralClient.generateArticle(userPrompt);
 
-        // Apply impact to all stocks in the sector
-        List<Stock> sectorStocks = eligibleStocks.stream()
-            .filter(s -> sector.equals(s.getSector()))
-            .toList();
+        // Each company in the sector gets basePct ± random variance
         for (Stock s : sectorStocks) {
-            applyPoolImpact(s, impactPct);
+            double variance = (rng.nextDouble() * SECTOR_IMPACT_VARIANCE * 2) - SECTOR_IMPACT_VARIANCE;
+            applyPoolImpact(s, basePct + variance);
         }
 
         NewsItem item = new NewsItem(
             article.headline(), article.body(),
-            "SECTOR", sector.name(), sectorLabel,
-            null, impactPct
+            "SECTOR", sector.name(), sectorName,
+            null, basePct
         );
         newsItemRepository.save(item);
         messagingTemplate.convertAndSend("/topic/news", item);
     }
 
-    // ─── Helpers ───────────────────────────────────────────────────────────
+    // ─── Direction logic ───────────────────────────────────────────────────
 
-    /**
-     * Determines whether the event should be positive or negative.
-     * Forced negative if stock is up >20% in last 24h; forced positive if down >25%.
-     */
-    private boolean determineDirection(Stock stock) {
-        double changePct = compute24hChangePct(stock);
-        if (changePct > REVERSAL_THRESHOLD_UP)   return false;
-        if (changePct < REVERSAL_THRESHOLD_DOWN)  return true;
+    private boolean determineCompanyDirection(double changePct) {
+        if (changePct > COMPANY_BIAS_UP_THRESHOLD)   return rng.nextDouble() > BIAS_PROBABILITY;
+        if (changePct < COMPANY_BIAS_DOWN_THRESHOLD) return rng.nextDouble() < BIAS_PROBABILITY;
         return rng.nextBoolean();
     }
+
+    private boolean determineSectorDirection(double avgChangePct) {
+        if (avgChangePct > SECTOR_BIAS_UP_THRESHOLD)   return rng.nextDouble() > BIAS_PROBABILITY;
+        if (avgChangePct < SECTOR_BIAS_DOWN_THRESHOLD) return rng.nextDouble() < BIAS_PROBABILITY;
+        return rng.nextBoolean();
+    }
+
+    // ─── Helpers ───────────────────────────────────────────────────────────
 
     private double compute24hChangePct(Stock stock) {
         List<Double> snaps = stock.getHourlySnapshots();
@@ -210,7 +231,6 @@ public class NewsService {
         return ref > 0 ? ((current - ref) / ref) * 100.0 : 0.0;
     }
 
-    /** Directly manipulates the AMM Branks reserve and broadcasts the updated price. */
     private void applyPoolImpact(Stock stock, double impactPct) {
         long newBranks = Math.round(stock.getLiquidityBranks() * (1.0 + impactPct / 100.0));
         if (newBranks < 1) newBranks = 1;

@@ -3,7 +3,7 @@ package com.ansh.lyfegameserver.service.news;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** Triggers news evaluation every 120 real-seconds (= 2 game-hours). */
+/** Triggers a daily news batch once per game-day (every 1440 real-seconds = 24 real-minutes). */
 @Component
 public class NewsScheduler {
 
@@ -13,8 +13,8 @@ public class NewsScheduler {
         this.newsService = newsService;
     }
 
-    @Scheduled(fixedRate = 120_000)
-    public void evaluateAndPublish() {
-        newsService.evaluateAndPublish();
+    @Scheduled(fixedRate = 1_440_000)
+    public void triggerDailyNews() {
+        newsService.triggerDailyNews();
     }
 }
