@@ -6,6 +6,8 @@ import com.ansh.lyfegameserver.data.Stock;
 import com.ansh.lyfegameserver.repository.NewsItemRepository;
 import com.ansh.lyfegameserver.repository.StockRepository;
 import com.ansh.lyfegameserver.websocket.StockPriceBroadcaster;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +16,8 @@ import java.util.stream.Collectors;
 
 @Service
 public class NewsService {
+
+    private static final Logger logger = LoggerFactory.getLogger(NewsService.class);
 
     // ─── Event type catalogues ─────────────────────────────────────────────
 
@@ -54,10 +58,6 @@ public class NewsService {
         Map.entry("SECTOR_SUBSIDY",    "receiving significant government subsidies and support")
     );
 
-    // ─── Tuning constants ──────────────────────────────────────────────────
-
-    private static final int    TOTAL_DAILY_HEADLINES      = 10;
-    private static final int    MAX_SECTOR_HEADLINES       = 4;
     /** Stock up >20% in 24h → 70% chance negative news */
     private static final double COMPANY_BIAS_UP_THRESHOLD  = 20.0;
     /** Stock down >25% in 24h → 70% chance positive news */
@@ -67,8 +67,13 @@ public class NewsService {
     /** Sector avg down >20% in 24h → 70% chance positive news */
     private static final double SECTOR_BIAS_DOWN_THRESHOLD = -20.0;
     private static final double BIAS_PROBABILITY           = 0.70;
-    /** Each company in a sector gets base impact ± this % */
     private static final double SECTOR_IMPACT_VARIANCE     = 2.0;
+
+    /**
+     * Roughly 1 in 4 ticks produces a sector story instead of a company story.
+     * With 12 ticks/game-day → ~3 sector + ~9 company headlines.
+     */
+    private static final double SECTOR_STORY_CHANCE = 0.25;
 
     private final StockRepository stockRepository;
     private final NewsItemRepository newsItemRepository;
@@ -76,6 +81,8 @@ public class NewsService {
     private final StockPriceBroadcaster broadcaster;
     private final SimpMessagingTemplate messagingTemplate;
     private final Random rng = new Random();
+
+    private int tickCount = 0;
 
     public NewsService(StockRepository stockRepository,
                        NewsItemRepository newsItemRepository,
@@ -96,38 +103,32 @@ public class NewsService {
     }
 
     /**
-     * Called once per game-day. Publishes a morning batch of ~10 headlines:
-     * one per distinct sector (capped at MAX_SECTOR_HEADLINES), with the
-     * remainder as company-specific stories.
+     * Called every ~2 game-hours by the scheduler.
+     * Publishes one headline: either a sector-wide story or a company-specific one.
      */
-    public void triggerDailyNews() {
+    public void publishNextStory() {
         List<Stock> eligible = stockRepository.findAll().stream()
             .filter(s -> !s.isGovtBond() && s.getSector() != null)
             .collect(Collectors.toList());
 
         if (eligible.isEmpty()) return;
 
-        List<Sector> sectors = eligible.stream()
-            .map(Stock::getSector)
-            .distinct()
-            .collect(Collectors.toList());
-        Collections.shuffle(sectors, rng);
+        tickCount++;
+        boolean doSector = rng.nextDouble() < SECTOR_STORY_CHANCE;
 
-        int sectorCount  = Math.min(sectors.size(), MAX_SECTOR_HEADLINES);
-        int companyCount = TOTAL_DAILY_HEADLINES - sectorCount;
-
-        for (int i = 0; i < sectorCount; i++) {
-            publishSectorEvent(eligible, sectors.get(i));
+        if (doSector) {
+            List<Sector> sectors = eligible.stream()
+                .map(Stock::getSector)
+                .distinct()
+                .collect(Collectors.toList());
+            Sector chosen = sectors.get(rng.nextInt(sectors.size()));
+            publishSectorEvent(eligible, chosen);
+        } else {
+            Collections.shuffle(eligible, rng);
+            publishCompanyEvent(eligible.get(0));
         }
 
-        List<Stock> candidates = new ArrayList<>(eligible);
-        Collections.shuffle(candidates, rng);
-        int published = 0;
-        for (Stock stock : candidates) {
-            if (published >= companyCount) break;
-            publishCompanyEvent(stock);
-            published++;
-        }
+        logger.debug("News tick #{}: published {} story", tickCount, doSector ? "sector" : "company");
     }
 
     // ─── Company event ─────────────────────────────────────────────────────
@@ -141,12 +142,12 @@ public class NewsService {
             : NEG_EVENTS[rng.nextInt(NEG_EVENTS.length)];
 
         String userPrompt = String.format(
-            "Company: %s (%s), Sector: %s%nPerformance: %s%.1f%% in the last 24 game-hours%nEvent: %s%nSentiment: %s%nWrite the news article.",
+            "Sentiment: %s%nCompany: %s (%s), Sector: %s%nEvent: %s is %s%nWrite the news article.",
+            positive ? "BULLISH" : "BEARISH",
             stock.getName(), stock.getTicker(),
             stock.getSector() != null ? sectorLabel(stock.getSector()) : "General",
-            changePct >= 0 ? "+" : "", changePct,
-            EVENT_DESC.getOrDefault(eventType, eventType),
-            positive ? "positive" : "negative"
+            stock.getName(),
+            EVENT_DESC.getOrDefault(eventType, eventType)
         );
 
         MistralClient.MistralArticle article = mistralClient.generateArticle(userPrompt);
@@ -183,16 +184,15 @@ public class NewsService {
 
         String sectorName = sectorLabel(sector);
         String userPrompt = String.format(
-            "Sector: %s%nPerformance: average %s%.1f%% across the sector in the last 24 game-hours%nEvent: %s%nSentiment: %s%nWrite the news article.",
+            "Sentiment: %s%nSector: %s%nEvent: The %s sector is %s%nWrite the news article.",
+            positive ? "BULLISH" : "BEARISH",
             sectorName,
-            avgChangePct >= 0 ? "+" : "", avgChangePct,
-            EVENT_DESC.getOrDefault(eventType, eventType),
-            positive ? "positive" : "negative"
+            sectorName,
+            EVENT_DESC.getOrDefault(eventType, eventType)
         );
 
         MistralClient.MistralArticle article = mistralClient.generateArticle(userPrompt);
 
-        // Each company in the sector gets basePct ± random variance
         for (Stock s : sectorStocks) {
             double variance = (rng.nextDouble() * SECTOR_IMPACT_VARIANCE * 2) - SECTOR_IMPACT_VARIANCE;
             applyPoolImpact(s, basePct + variance);

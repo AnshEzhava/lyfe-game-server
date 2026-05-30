@@ -23,7 +23,11 @@ public class MistralClient {
     private static final String MODEL   = "mistral-small-latest";
     private static final String SYSTEM_PROMPT =
         "You are a financial news writer for a fictional game economy called Lyfe Game. " +
-        "Write brief, dramatic news articles. " +
+        "You will be given a sentiment (BULLISH or BEARISH) and an event. " +
+        "The sentiment of your article MUST match exactly: " +
+        "BULLISH articles must be unambiguously good news — optimistic headline, positive language, no hedging or doubt. " +
+        "BEARISH articles must be unambiguously bad news — alarming headline, negative language, no silver linings. " +
+        "Never contradict the sentiment. Never mix positive and negative tones in the same article. " +
         "Always respond with valid JSON: {\"headline\": \"...\", \"body\": \"...\"}. " +
         "Body is exactly 2 sentences. Do not mention specific percentages.";
 
