@@ -36,7 +36,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: MISTRAL_API_KEY,CLERK_ISSUER_URI,CLERK_JWKS_URI,DEV_PASSKEY_HASH
+          envs: MISTRAL_API_KEY,CLERK_ISSUER_URI,CLERK_JWKS_URI,DEV_PASSKEY_HASH,MONGODB_URI
           script: |
             mv /opt/springboot/lyfe-game-server-0.0.1-SNAPSHOT.jar /opt/springboot/app.jar
             cat > /opt/springboot/.env << ENVEOF
@@ -44,12 +44,14 @@ jobs:
             CLERK_ISSUER_URI=${CLERK_ISSUER_URI}
             CLERK_JWKS_URI=${CLERK_JWKS_URI}
             DEV_PASSKEY_HASH=${DEV_PASSKEY_HASH}
+            MONGODB_URI=${MONGODB_URI}
             ENVEOF
             sudo systemctl restart springboot
             sleep 5
-            sudo systemctl status springboot --no-pager
+            sudo systemctl status springboot
         env:
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           CLERK_ISSUER_URI: ${{ secrets.CLERK_ISSUER_URI }}
           CLERK_JWKS_URI: ${{ secrets.CLERK_JWKS_URI }}
           DEV_PASSKEY_HASH: ${{ secrets.DEV_PASSKEY_HASH }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
