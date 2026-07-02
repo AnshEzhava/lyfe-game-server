@@ -166,6 +166,9 @@ public class StockService {
         holding.setLastTradedAt(now);
         holding.setLastBuyAt(now);
 
+        com.ansh.lyfegameserver.service.activity.ActivityService.record(
+            user, "TRADE", -cost, "Bought " + quantity + " " + stock.getTicker());
+
         stock.appendPrice(stock.getCurrentPrice());
         stockRepository.save(stock);
         Users saved = userRepository.save(user);
@@ -219,6 +222,9 @@ public class StockService {
 
         holding.setSharesOwned(holding.getSharesOwned() - quantity);
         holding.setLastTradedAt(now);
+
+        com.ansh.lyfegameserver.service.activity.ActivityService.record(
+            user, "TRADE", netReturn, "Sold " + quantity + " " + stock.getTicker());
 
         stock.appendPrice(stock.getCurrentPrice());
         stockRepository.save(stock);
@@ -393,6 +399,9 @@ public class StockService {
                 long yield = (long) Math.floor(eligibleValue * yieldFraction);
                 if (yield > 0) {
                     user.setBranks(user.getBranks() + yield);
+                    user.setLifetimeBondYield(user.getLifetimeBondYield() + yield);
+                    com.ansh.lyfegameserver.service.activity.ActivityService.record(
+                        user, "BOND_YIELD", yield, "Government bond yield");
                     userRepository.save(user);
                 }
                 break;
@@ -401,6 +410,31 @@ public class StockService {
 
         bond.setLastYieldPaidAt(System.currentTimeMillis());
         stockRepository.save(bond);
+    }
+
+    /**
+     * Auto-invests up to {@code branksToInvest} Branks into the government bond by buying whole
+     * shares at the current price. Best-effort: returns the Branks actually spent, or 0 if the
+     * bond is missing, the amount is too small, or the buy is rejected (cooldown / pool impact).
+     */
+    public long reinvestIntoBond(String clerkId, long branksToInvest) {
+        if (branksToInvest <= 0) return 0L;
+        Optional<Stock> bondOpt = stockRepository.findByTicker("BOND");
+        if (bondOpt.isEmpty()) return 0L;
+
+        Stock bond = bondOpt.get();
+        double price = bond.getCurrentPrice();
+        if (price <= 0) return 0L;
+
+        long quantity = (long) Math.floor(branksToInvest / price);
+        if (quantity <= 0) return 0L;
+
+        try {
+            TradeResult result = executeBuy(clerkId, bond.getId(), quantity);
+            return result.branksDelta(); // for a buy this is the positive cost
+        } catch (Exception e) {
+            return 0L; // cooldown / pool-impact / insufficient funds — skip gracefully
+        }
     }
 
     // ─── Limit Order Fill (called by scheduler) ──────────────────────────────

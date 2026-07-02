@@ -66,6 +66,8 @@ public class TaxService {
                 long paid = Math.min(tax, user.getBranks());
                 user.setBranks(user.getBranks() - paid);
                 user.setTotalTaxPaid(user.getTotalTaxPaid() + paid);
+                com.ansh.lyfegameserver.service.activity.ActivityService.record(
+                    user, "TAX", -paid, "Annual tax on " + profit + " profit");
             }
 
             // Re-anchor for the next year using post-tax net worth.

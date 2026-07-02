@@ -11,4 +11,6 @@ public class UserResponse {
     private String displayName;
     private Long balance;
     private UserStats stats;
+    private long netWorth;
+    private long totalTaxPaid;
 }

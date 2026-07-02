@@ -43,6 +43,32 @@ public class Users {
     /** Cumulative Branks paid in tax over the user's lifetime. */
     private long totalTaxPaid;
 
+    // ─── AFK / offline-loop state ─────────────────────────────────────────────
+
+    /** Epoch ms the player was last seen (used to build the "while you were away" summary). */
+    private long lastSeenAt;
+
+    /** Branks balance captured at lastSeenAt; baseline for the return summary delta. */
+    private long lastSeenBranks;
+
+    /** Net worth captured at lastSeenAt; baseline for the return summary delta. */
+    private long lastSeenNetWorth;
+
+    /** Running total of wages ever earned. Delta since snapshot drives the summary. */
+    private long lifetimeWagesEarned;
+
+    /** Running total of bond yield ever received. Delta since snapshot drives the summary. */
+    private long lifetimeBondYield;
+
+    /** AFK automation preferences. */
+    private UserSettings settings;
+
+    /** Recent income/expense events, capped at {@link #MAX_ACTIVITY_EVENTS} (most recent last). */
+    private List<ActivityEvent> recentActivity = new ArrayList<>();
+
+    /** Maximum number of activity events retained per user. */
+    public static final int MAX_ACTIVITY_EVENTS = 40;
+
     public Users(String clerkId, String displayName){
         this.clerkId = clerkId;
         this.displayName = displayName;
@@ -55,5 +81,12 @@ public class Users {
         this.taxAnchorAt = System.currentTimeMillis();
         this.taxAnchorNetWorth = this.branks;
         this.totalTaxPaid = 0L;
+        this.lastSeenAt = System.currentTimeMillis();
+        this.lastSeenBranks = this.branks;
+        this.lastSeenNetWorth = this.branks;
+        this.lifetimeWagesEarned = 0L;
+        this.lifetimeBondYield = 0L;
+        this.settings = new UserSettings();
+        this.recentActivity = new ArrayList<>();
     }
 }

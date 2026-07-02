@@ -7,4 +7,6 @@ import java.util.List;
 
 public interface NewsItemRepository extends MongoRepository<NewsItem, String> {
     List<NewsItem> findTop20ByOrderByPublishedAtDesc();
+
+    List<NewsItem> findByPublishedAtGreaterThanEqualOrderByPublishedAtDesc(long publishedAt);
 }

@@ -55,7 +55,9 @@ public class StockController {
                 result.user().getId(),
                 result.user().getDisplayName(),
                 result.user().getBranks(),
-                result.user().getStats()
+                result.user().getStats(),
+                stockService.computeNetWorth(result.user()),
+                result.user().getTotalTaxPaid()
             );
             return ResponseEntity.ok(new TradeResponse(
                 0, "Trade executed.",
@@ -154,7 +156,9 @@ public class StockController {
                 result.user().getId(),
                 result.user().getDisplayName(),
                 result.user().getBranks(),
-                result.user().getStats()
+                result.user().getStats(),
+                stockService.computeNetWorth(result.user()),
+                result.user().getTotalTaxPaid()
             );
             return ResponseEntity.ok(new TradeResponse(
                 0, "Dilution complete.",

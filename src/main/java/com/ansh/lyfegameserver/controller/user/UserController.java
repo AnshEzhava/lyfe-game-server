@@ -13,6 +13,11 @@ import com.ansh.lyfegameserver.dto.user.CreateUserRequest;
 import com.ansh.lyfegameserver.dto.user.CreateUserResponse;
 import com.ansh.lyfegameserver.dto.user.StudyResponse;
 import com.ansh.lyfegameserver.dto.user.UserResponse;
+import com.ansh.lyfegameserver.dto.user.ActivityResponse;
+import com.ansh.lyfegameserver.dto.user.SettingsResponse;
+import com.ansh.lyfegameserver.dto.user.UpdateSettingsRequest;
+import com.ansh.lyfegameserver.dto.user.WhileAwaySummary;
+import com.ansh.lyfegameserver.data.UserSettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.ansh.lyfegameserver.service.user.UserService;
@@ -29,9 +34,15 @@ public class UserController {
     private static final Logger logger = LoggerFactory.getLogger(UserController.class);
 
     private final UserService userService;
+    private final com.ansh.lyfegameserver.service.stock.StockService stockService;
+    private final com.ansh.lyfegameserver.service.user.SessionService sessionService;
 
-    public UserController(UserService userService) {
+    public UserController(UserService userService,
+                          com.ansh.lyfegameserver.service.stock.StockService stockService,
+                          com.ansh.lyfegameserver.service.user.SessionService sessionService) {
         this.userService = userService;
+        this.stockService = stockService;
+        this.sessionService = sessionService;
     }
 
     @GetMapping("/find")
@@ -40,12 +51,7 @@ public class UserController {
         logger.info("Finding user with clerkId: {}", clerkId);
         return userService.findByClerkId(clerkId)
             .map(user -> {
-                UserResponse userResponse = new UserResponse(
-                    user.getId(),
-                    user.getDisplayName(),
-                    user.getBranks(),
-                    user.getStats()
-                );
+                UserResponse userResponse = toUserResponse(user);
                 return ResponseEntity.ok(new StudyResponse(0, "Success", userResponse));
             })
             .orElseGet(() -> ResponseEntity.notFound().build());
@@ -165,7 +171,49 @@ public class UserController {
         }
     }
 
+    @PostMapping("/resume")
+    public ResponseEntity<WhileAwaySummary> resume(JwtAuthenticationToken auth) {
+        try {
+            return ResponseEntity.ok(sessionService.resume(auth.getName()));
+        } catch (RuntimeException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    @GetMapping("/settings")
+    public ResponseEntity<SettingsResponse> getSettings(JwtAuthenticationToken auth) {
+        try {
+            UserSettings s = userService.getSettings(auth.getName());
+            return ResponseEntity.ok(new SettingsResponse(0, "Success", s.isAutoClaimWages(), s.isAutoReinvest()));
+        } catch (RuntimeException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    @PutMapping("/settings")
+    public ResponseEntity<SettingsResponse> updateSettings(
+        @RequestBody UpdateSettingsRequest req,
+        JwtAuthenticationToken auth
+    ) {
+        try {
+            UserSettings s = userService.updateSettings(auth.getName(), req.autoClaimWages(), req.autoReinvest());
+            return ResponseEntity.ok(new SettingsResponse(0, "Settings updated.", s.isAutoClaimWages(), s.isAutoReinvest()));
+        } catch (RuntimeException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    @GetMapping("/activity")
+    public ResponseEntity<ActivityResponse> getActivity(JwtAuthenticationToken auth) {
+        try {
+            return ResponseEntity.ok(new ActivityResponse(0, "Success", userService.getRecentActivity(auth.getName())));
+        } catch (RuntimeException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
     private UserResponse toUserResponse(Users user) {
-        return new UserResponse(user.getId(), user.getDisplayName(), user.getBranks(), user.getStats());
+        return new UserResponse(user.getId(), user.getDisplayName(), user.getBranks(), user.getStats(),
+            stockService.computeNetWorth(user), user.getTotalTaxPaid());
     }
 }

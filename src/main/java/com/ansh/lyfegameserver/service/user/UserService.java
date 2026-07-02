@@ -13,6 +13,7 @@ import com.ansh.lyfegameserver.dto.job.ActiveJobInfo;
 import com.ansh.lyfegameserver.dto.job.JobInfo;
 import com.ansh.lyfegameserver.dto.job.JobStatusResponse;
 import com.ansh.lyfegameserver.repository.UserRepository;
+import com.ansh.lyfegameserver.service.activity.ActivityService;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -20,6 +21,13 @@ import java.util.Optional;
 
 @Service
 public class UserService {
+
+    /**
+     * Maximum wall-clock time (ms) over which wages accrue while the player is away.
+     * 720,000 ms = 12 game-hours (1 game-hour = 60 real-seconds). Beyond this, wages pause
+     * until the player returns, giving a reason to check back without punishing short absences.
+     */
+    private static final long MAX_OFFLINE_ACCRUAL_MS = 720_000L;
 
     private final UserRepository userRepository;
     private final GameCatalog gameCatalog;
@@ -103,6 +111,10 @@ public class UserService {
 
         user.setBranks(user.getBranks() + wages);
         user.getActiveJob().setLastClaimedAt(System.currentTimeMillis());
+        if (wages > 0) {
+            user.setLifetimeWagesEarned(user.getLifetimeWagesEarned() + wages);
+            ActivityService.record(user, "WAGE", wages, "Wages claimed");
+        }
         Users saved = userRepository.save(user);
         return new ClaimWageResult(saved, wages);
     }
@@ -183,14 +195,45 @@ public class UserService {
             .orElseThrow(() -> new IllegalStateException("Course definition not found."));
 
         int currentIntelligence = user.getStats().getIntelligence();
-        int newIntelligence = Math.min(currentIntelligence + course.getIntelligenceReward(), 100);
+        int gained = Math.min(currentIntelligence + course.getIntelligenceReward(), 100) - currentIntelligence;
+        int newIntelligence = currentIntelligence + gained;
         user.getStats().setIntelligence(newIntelligence);
         enrollment.setRewardClaimed(true);
+
+        ActivityService.record(user, "COURSE_COMPLETE", 0,
+            course.getName() + " completed (+" + gained + " INT)");
 
         // Clear the enrollment so they can start a new course
         user.setActiveCourse(null);
 
         return userRepository.save(user);
+    }
+
+    public com.ansh.lyfegameserver.data.UserSettings getSettings(String clerkId) {
+        Users user = requireUser(clerkId);
+        if (user.getSettings() == null) {
+            user.setSettings(new com.ansh.lyfegameserver.data.UserSettings());
+            userRepository.save(user);
+        }
+        return user.getSettings();
+    }
+
+    public com.ansh.lyfegameserver.data.UserSettings updateSettings(String clerkId,
+                                                                    boolean autoClaimWages,
+                                                                    boolean autoReinvest) {
+        Users user = requireUser(clerkId);
+        com.ansh.lyfegameserver.data.UserSettings settings =
+            user.getSettings() != null ? user.getSettings() : new com.ansh.lyfegameserver.data.UserSettings();
+        settings.setAutoClaimWages(autoClaimWages);
+        settings.setAutoReinvest(autoReinvest);
+        user.setSettings(settings);
+        userRepository.save(user);
+        return settings;
+    }
+
+    public List<com.ansh.lyfegameserver.data.ActivityEvent> getRecentActivity(String clerkId) {
+        Users user = requireUser(clerkId);
+        return user.getRecentActivity() != null ? user.getRecentActivity() : List.of();
     }
 
     private Users requireUser(String clerkId) {
@@ -214,7 +257,10 @@ public class UserService {
         if (def == null) return 0L;
 
         long referenceTime = job.getLastClaimedAt() != null ? job.getLastClaimedAt() : job.getStartedAt();
-        long elapsedMs = System.currentTimeMillis() - referenceTime;
+        // Cap offline accrual: wages stop building after MAX_OFFLINE_ACCRUAL_MS so long
+        // absences don't return an economy-breaking lump sum. This keeps the client-facing
+        // pendingWages and the actual payout consistent.
+        long elapsedMs = Math.min(System.currentTimeMillis() - referenceTime, MAX_OFFLINE_ACCRUAL_MS);
         double elapsedSeconds = elapsedMs / 1000.0;
 
         // branks_per_real_second = (baseHourlyRate / 60.0) * (intelligence / 50.0)
@@ -226,6 +272,8 @@ public class UserService {
         long wages = computePendingWages(user, intelligence);
         if (wages > 0) {
             user.setBranks(user.getBranks() + wages);
+            user.setLifetimeWagesEarned(user.getLifetimeWagesEarned() + wages);
+            ActivityService.record(user, "WAGE", wages, "Wages collected");
         }
         user.getActiveJob().setLastClaimedAt(System.currentTimeMillis());
     }
