@@ -49,6 +49,9 @@ public class Stock {
     /** Timestamp of the last yield payout. Only meaningful for govt bond. */
     private long lastYieldPaidAt;
 
+    /** Timestamp of the last founder dilution. Used to rate-limit dilutions. */
+    private long lastDilutedAt;
+
     /** Rolling price history, capped at 100 entries (most recent last). */
     private List<Double> priceHistory = new ArrayList<>();
 

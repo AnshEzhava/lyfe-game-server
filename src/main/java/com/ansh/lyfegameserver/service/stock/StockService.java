@@ -38,6 +38,14 @@ public class StockService {
     /** Minimum Branks balance required to launch an IPO. */
     private static final long IPO_MIN_BRANKS = 1_000_000L;
 
+    /**
+     * Maximum bond holding value (in Branks) that earns yield per payout.
+     * Yield is paid on min(holdingValue, this cap), so payouts plateau instead of
+     * scaling linearly with holdings — preventing the compounding runaway where large
+     * holders earned millions of Branks every game-day.
+     */
+    private static final long BOND_MAX_YIELDABLE_VALUE = 1_000_000L;
+
     private final StockRepository stockRepository;
     private final LimitOrderRepository limitOrderRepository;
     private final UserRepository userRepository;
@@ -70,7 +78,6 @@ public class StockService {
         Users user = requireUser(clerkId);
 
         List<PortfolioResponse.HoldingInfo> holdings = new ArrayList<>();
-        long holdingsValue = 0L;
 
         for (UserStockHolding h : user.getStockHoldings()) {
             Optional<Stock> stockOpt = stockRepository.findById(h.getStockId());
@@ -78,14 +85,29 @@ public class StockService {
             Stock stock = stockOpt.get();
             double price = stock.getCurrentPrice();
             long currentValue = (long) Math.floor(h.getSharesOwned() * price);
-            holdingsValue += currentValue;
             holdings.add(new PortfolioResponse.HoldingInfo(
                 stock.getId(), stock.getTicker(), stock.getName(),
                 h.getSharesOwned(), price, currentValue
             ));
         }
 
-        // If user has founded a company, include retained founder shares at market price
+        long netWorth = computeNetWorth(user);
+
+        return new PortfolioResponse(0, "Success", holdings, netWorth, user.getBranks());
+    }
+
+    /**
+     * Total net worth = Branks + holdings valued at market + retained founder equity.
+     * Shared by the portfolio endpoint and the annual tax assessment.
+     */
+    public long computeNetWorth(Users user) {
+        long holdingsValue = 0L;
+        for (UserStockHolding h : user.getStockHoldings()) {
+            Optional<Stock> stockOpt = stockRepository.findById(h.getStockId());
+            if (stockOpt.isEmpty() || h.getSharesOwned() <= 0) continue;
+            holdingsValue += (long) Math.floor(h.getSharesOwned() * stockOpt.get().getCurrentPrice());
+        }
+
         long founderEquity = 0L;
         if (user.getIpo() != null && user.getIpo().getFounderSharesRetained() > 0) {
             Optional<Stock> ipoStock = stockRepository.findById(user.getIpo().getStockId());
@@ -96,9 +118,7 @@ public class StockService {
             }
         }
 
-        long netWorth = user.getBranks() + holdingsValue + founderEquity;
-
-        return new PortfolioResponse(0, "Success", holdings, netWorth, user.getBranks());
+        return user.getBranks() + holdingsValue + founderEquity;
     }
 
     // ─── Trading ────────────────────────────────────────────────────────────
@@ -110,6 +130,8 @@ public class StockService {
         if (quantity <= 0) {
             throw new IllegalArgumentException("Quantity must be positive.");
         }
+
+        rejectFounderSelfTrade(clerkId, stock);
 
         UserStockHolding holding = getOrCreateHolding(user, stockId);
         enforceCooldown(holding, stock.getTicker());
@@ -161,6 +183,8 @@ public class StockService {
         if (quantity <= 0) {
             throw new IllegalArgumentException("Quantity must be positive.");
         }
+
+        rejectFounderSelfTrade(clerkId, stock);
 
         UserStockHolding holding = getOrCreateHolding(user, stockId);
         enforceCooldown(holding, stock.getTicker());
@@ -306,6 +330,18 @@ public class StockService {
             );
         }
 
+        // Rate-limit dilutions to curb pool-draining / price manipulation.
+        long now = System.currentTimeMillis();
+        if (stock.getLastDilutedAt() > 0) {
+            long elapsed = now - stock.getLastDilutedAt();
+            if (elapsed < TRADE_COOLDOWN_MS) {
+                long remainingSec = (TRADE_COOLDOWN_MS - elapsed + 999) / 1000;
+                throw new IllegalStateException(
+                    "Dilution on cooldown. Try again in " + remainingSec + "s."
+                );
+            }
+        }
+
         long maxBranksImpact = (long) (stock.getLiquidityBranks() * MAX_POOL_IMPACT_FRACTION);
         long grossReturn = computeSellReturn(stock, quantity);
         if (grossReturn > maxBranksImpact) {
@@ -319,6 +355,7 @@ public class StockService {
         stock.setLiquidityBranks(stock.getLiquidityBranks() - grossReturn);
         stock.setLiquidityShares(stock.getLiquidityShares() + quantity);
         stock.setFounderSharesRetained(stock.getFounderSharesRetained() - quantity);
+        stock.setLastDilutedAt(now);
 
         stock.appendPrice(stock.getCurrentPrice());
         stockRepository.save(stock);
@@ -349,7 +386,11 @@ public class StockService {
                 if (!h.getStockId().equals(bond.getId())) continue;
                 if (h.getSharesOwned() <= 0) continue;
 
-                long yield = (long) Math.floor(h.getSharesOwned() * pricePerShare * yieldFraction);
+                // Cap the principal that earns yield so payouts plateau rather than
+                // compounding without bound for large holders.
+                double holdingValue = h.getSharesOwned() * pricePerShare;
+                double eligibleValue = Math.min(holdingValue, BOND_MAX_YIELDABLE_VALUE);
+                long yield = (long) Math.floor(eligibleValue * yieldFraction);
                 if (yield > 0) {
                     user.setBranks(user.getBranks() + yield);
                     userRepository.save(user);
@@ -421,6 +462,19 @@ public class StockService {
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
+
+    /**
+     * Founders may not buy or sell their own company's stock on the open market — that
+     * (combined with dilute) enabled self price-manipulation. They can still raise Branks
+     * by diluting retained shares via {@link #dilute}.
+     */
+    private void rejectFounderSelfTrade(String clerkId, Stock stock) {
+        if (clerkId.equals(stock.getFounderClerkId())) {
+            throw new IllegalStateException(
+                "Founders cannot trade their own company's stock. Use dilute to sell retained shares."
+            );
+        }
+    }
 
     private void enforceCooldown(UserStockHolding holding, String ticker) {
         long now = System.currentTimeMillis();

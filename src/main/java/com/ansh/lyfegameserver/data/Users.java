@@ -34,6 +34,15 @@ public class Users {
     /** IPO the user has founded, or null if none */
     private UserIPO ipo;
 
+    /** Start timestamp of the current tax year (ms). */
+    private long taxAnchorAt;
+
+    /** Net worth captured at the start of the current tax year; the tax baseline. */
+    private long taxAnchorNetWorth;
+
+    /** Cumulative Branks paid in tax over the user's lifetime. */
+    private long totalTaxPaid;
+
     public Users(String clerkId, String displayName){
         this.clerkId = clerkId;
         this.displayName = displayName;
@@ -43,5 +52,8 @@ public class Users {
         this.activeCourse = null;
         this.stockHoldings = new ArrayList<>();
         this.ipo = null;
+        this.taxAnchorAt = System.currentTimeMillis();
+        this.taxAnchorNetWorth = this.branks;
+        this.totalTaxPaid = 0L;
     }
 }
