@@ -10,7 +10,8 @@ import java.util.List;
 /**
  * Assesses a progressive annual tax on each user's net-worth growth.
  *
- * <p>One game-year = 365 game-days = 365 × 24 real-seconds = 8,760,000 ms (~2h26m).
+ * <p>One game-year = 365 game-days = 365 × 24 real-minutes = 525,600,000 ms (~6.08 real days),
+ * on the 60× game clock (1 real-second = 1 game-minute).
  * Each user is taxed independently once their own tax year elapses: profit for the year is
  * {@code currentNetWorth - taxAnchorNetWorth}, taxed with the marginal brackets below and
  * deducted from Branks (never below zero). The anchor is then reset to "now" and the
@@ -19,8 +20,8 @@ import java.util.List;
 @Service
 public class TaxService {
 
-    /** One game-year in real milliseconds (365 game-days × 24 real-seconds). */
-    private static final long GAME_YEAR_MS = 365L * 24_000L;
+    /** One game-year in real milliseconds (365 game-days × 24 real-minutes on the 60× clock). */
+    private static final long GAME_YEAR_MS = 365L * 1_440_000L;
 
     /**
      * Progressive marginal tax brackets on annual profit (Branks).

@@ -29,8 +29,8 @@ import java.util.Set;
 @Service
 public class SessionService {
 
-    /** 1 game-day = 24 real-seconds (see StockScheduler). */
-    private static final long GAME_DAY_MS = 24_000L;
+    /** 1 game-day = 24 real-minutes on the 60× clock (see StockScheduler). */
+    private static final long GAME_DAY_MS = 1_440_000L;
 
     private final UserRepository userRepository;
     private final UserService userService;
