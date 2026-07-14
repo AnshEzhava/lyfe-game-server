@@ -22,6 +22,7 @@ import java.util.Random;
 public class CasinoService {
 
     private static final long MIN_BET = 10L;
+    private static final long MAX_BET = 1_000_000L;
 
     /** Correct HIGH/LOW or coin call pays this multiple (fair would be 2.0 → ~2.5% edge). */
     private static final double EVEN_MONEY_PAYOUT = 1.95;
@@ -58,6 +59,7 @@ public class CasinoService {
 
         long bet = req.bet();
         if (bet < MIN_BET) throw new IllegalArgumentException("Minimum bet is " + MIN_BET + " Branks.");
+        if (bet > MAX_BET) throw new IllegalArgumentException("Maximum bet is " + MAX_BET + " Branks.");
         if (user.getBranks() < bet) throw new IllegalStateException("Insufficient Branks for this bet.");
 
         String game = req.game() == null ? "" : req.game().toUpperCase();
