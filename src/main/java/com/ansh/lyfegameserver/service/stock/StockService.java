@@ -137,7 +137,7 @@ public class StockService {
         enforceCooldown(holding, stock.getTicker());
 
         // Validate trade size doesn't exceed MAX_POOL_IMPACT_FRACTION of pool
-        long maxBranksImpact = (long) (stock.getLiquidityBranks() * MAX_POOL_IMPACT_FRACTION);
+        long maxBranksImpact = maxPoolImpact(stock);
         long cost = computeBuyCost(stock, quantity);
         if (cost > maxBranksImpact) {
             throw new IllegalStateException(
@@ -199,7 +199,7 @@ public class StockService {
         }
 
         // Validate trade size
-        long maxBranksImpact = (long) (stock.getLiquidityBranks() * MAX_POOL_IMPACT_FRACTION);
+        long maxBranksImpact = maxPoolImpact(stock);
         long grossReturn = computeSellReturn(stock, quantity);
         if (grossReturn > maxBranksImpact) {
             throw new IllegalStateException(
@@ -348,7 +348,7 @@ public class StockService {
             }
         }
 
-        long maxBranksImpact = (long) (stock.getLiquidityBranks() * MAX_POOL_IMPACT_FRACTION);
+        long maxBranksImpact = maxPoolImpact(stock);
         long grossReturn = computeSellReturn(stock, quantity);
         if (grossReturn > maxBranksImpact) {
             throw new IllegalStateException(
@@ -493,6 +493,18 @@ public class StockService {
         double b = stock.getLiquidityBranks();
         double s = stock.getLiquidityShares();
         return (long) Math.floor(b * shares / (s + shares));
+    }
+
+    /**
+     * Max Branks a single trade may move the pool: {@link #MAX_POOL_IMPACT_FRACTION} of depth,
+     * but never below 1. Without the floor, {@code (long)(B * 0.10)} truncates to 0 once a pool
+     * crashes to B &lt; 10, which rejects every buy (cost is always &ge; 1) and freezes the price at
+     * ~0 with no way to recover. The floor lets a crashed stock accept recovery buys again.
+     * ponytail: floor is 1 (minimal), so recovery from near-zero is slow; raise it if crashed
+     * stocks should heal faster.
+     */
+    long maxPoolImpact(Stock stock) {
+        return Math.max(1L, (long) (stock.getLiquidityBranks() * MAX_POOL_IMPACT_FRACTION));
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
